@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>North America DC Hotspot Scanner</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/osmtogeojson@3.0.0-beta.5/osmtogeojson.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#0d1117; color:#e6edf3; }
+  .app { display:flex; height:100vh; }
+  #map { flex:3; height:100vh; background:#0d1117; }
+  .panel { flex:1; min-width:320px; max-width:380px; background:#161b22; border-left:1px solid #30363d; display:flex; flex-direction:column; overflow:hidden; }
+  .panel-header { padding:16px 18px 12px; border-bottom:1px solid #30363d; }
+  .panel-header h1 { font-size:1.02rem; font-weight:600; color:#f0f6fc; margin-bottom:4px; }
+  .panel-header p { font-size:0.68rem; color:#8b949e; line-height:1.45; }
+  .panel-body { flex:1; overflow-y:auto; padding:14px 18px; }
+  .section-title { font-size:0.66rem; text-transform:uppercase; letter-spacing:0.8px; color:#58a6ff; margin:14px 0 8px; }
+  .section-title:first-child { margin-top:0; }
+
+  .scan-box { background:#1c2128; border:1px solid #30363d; border-radius:8px; padding:12px; margin-bottom:6px; }
+  .scan-box button { width:100%; padding:10px; border:none; border-radius:6px; background:#238636; color:#fff; font-weight:600; font-size:0.85rem; cursor:pointer; }
+  .scan-box button:disabled { background:#30363d; color:#8b949e; cursor:wait; }
+  .scan-box button.secondary { background:#30363d; margin-top:6px; }
+  .progress-track { height:6px; background:#0d1117; border-radius:4px; margin-top:10px; overflow:hidden; display:none; }
+  .progress-track.active { display:block; }
+  .progress-fill { height:100%; background:#3fb950; width:0%; transition: width 0.2s; }
+  .scan-status { font-size:0.68rem; color:#8b949e; margin-top:8px; line-height:1.5; }
+  .scan-status.error { color:#f85149; }
+
+  .criteria-list { display:flex; flex-direction:column; gap:7px; }
+  .criteria-item { display:flex; align-items:center; gap:9px; background:#21262d; border:1px solid #30363d; border-radius:8px; padding:9px 11px; cursor:pointer; }
+  .criteria-item:hover { border-color:#58a6ff; }
+  .criteria-item.active { background:#1c2b3a; border-color:#58a6ff; }
+  .criteria-item input { width:15px; height:15px; accent-color:#58a6ff; cursor:pointer; }
+  .criteria-item .swatch { width:11px; height:11px; border-radius:3px; flex-shrink:0; }
+  .criteria-item .label { flex:1; font-size:0.8rem; font-weight:600; color:#f0f6fc; }
+  .criteria-item .desc { font-size:0.6rem; color:#8b949e; display:block; font-weight:400; margin-top:1px; }
+  .threshold-inline { font-size:0.6rem; color:#6e7681; margin-left:4px; }
+
+  input[type=range] { width:100%; accent-color:#58a6ff; cursor:pointer; }
+  .mini-row { display:flex; justify-content:space-between; font-size:0.62rem; color:#8b949e; margin-top:4px; }
+
+  .stats { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0; }
+  .stat { background:#21262d; border:1px solid #30363d; border-radius:8px; padding:9px; text-align:center; }
+  .stat .val { font-size:1.25rem; font-weight:700; color:#3fb950; }
+  .stat .lbl { font-size:0.58rem; color:#8b949e; margin-top:3px; }
+
+  .match-list { display:flex; flex-direction:column; gap:6px; max-height:340px; overflow-y:auto; }
+  .match-item { background:#21262d; border:1px solid #30363d; border-left:3px solid #3fb950; border-radius:6px; padding:8px 10px; cursor:pointer; }
+  .match-item:hover { background:#2d333b; }
+  .match-item.unknown { border-left-color:#8b949e; opacity:0.8; }
+  .match-name { font-size:0.76rem; font-weight:600; color:#f0f6fc; display:flex; justify-content:space-between; }
+  .match-meta { font-size:0.6rem; color:#8b949e; margin-top:3px; }
+  .empty-msg { font-size:0.72rem; color:#8b949e; padding:8px 0; text-align:center; }
+
+  .footer-note { margin-top:14px; padding-top:12px; border-top:1px solid #30363d; font-size:0.6rem; color:#555; line-height:1.65; }
+  .footer-note a { color:#58a6ff; }
+
+  .leaflet-popup-content-wrapper { background:#161b22; color:#e6edf3; }
+  .leaflet-popup-tip { background:#161b22; }
+  .leaflet-popup-content a { color:#58a6ff; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="map"></div>
+  <div class="panel">
+    <div class="panel-header">
+      <h1>🇺🇸 NA DC Hotspot Scanner</h1>
+      <p>Screen 68 U.S. reference locations for mapped water, power, industrial areas and telecom facilities. These are geographic leads, not confirmed buildable sites. Canada and Mexico are not included yet.</p>
+    </div>
+    <div class="panel-body">
+
+      <div class="scan-box">
+        <label for="candidateSelect">Start with one location</label>
+        <select id="candidateSelect" style="width:100%;padding:9px;margin:7px 0;background:#21262d;color:white;border:1px solid #555;border-radius:5px"></select>
+        <button id="oneBtn">Load selected location</button>
+        <button id="scanBtn" class="secondary">Scan remaining locations</button>
+        <button id="stopBtn" class="secondary" style="display:none">Stop scan</button>
+        <button id="exportBtn" class="secondary" disabled>Save loaded data for GitHub</button>
+        <button id="rescanBtn" class="secondary" style="display:none;">Rescan</button>
+        <label for="endpointSelect" style="display:block;margin-top:10px">Public data service</label>
+        <select id="endpointSelect" style="width:100%;padding:7px;margin-top:5px;background:#21262d;color:white;border:1px solid #555"><option value="https://overpass.private.coffee/api/interpreter">OpenStreetMap · Private.coffee</option><option value="https://overpass-api.de/api/interpreter">OpenStreetMap · main server</option></select>
+        <div class="progress-track" id="progressTrack"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="scan-status" id="scanStatus" role="status" aria-live="polite">No geographic observations are bundled. Load one location first to check the connection. Successful results are saved in this browser. A full scan can take many minutes.</div>
+        <div id="coverageStatus" class="scan-status">0 loaded · 0 failed · 68 not loaded</div>
+      </div>
+
+      <div class="section-title">Your must-haves</div>
+      <div class="criteria-list" id="criteriaList"></div>
+
+      <div class="stats">
+        <div class="stat"><div class="val" id="s-match">—</div><div class="lbl">Locations match</div></div>
+        <div class="stat"><div class="val" id="s-checked">0</div><div class="lbl">Criteria selected</div></div>
+      </div>
+
+      <div class="section-title">Shortlist</div>
+      <div class="match-list" id="matchList"><div class="empty-msg">Run a scan to populate the shortlist.</div></div>
+
+      <div class="footer-note">
+        <strong>How this differs from the detailed local Atlas tool:</strong> each hotspot here is checked as a single point (real OSM proximity to mapped water/substations/industrial land/telecom sites), not a dense 1km grid. Treat a match here as "worth a closer look," not a verified site — open the companion <b>North America Data Center Atlas</b> tool and load this exact area for the full dense-grid verification before doing anything with it.<br><br>
+        <strong>Sources:</strong> <a href="https://wiki.openstreetmap.org/wiki/Overpass_API" target="_blank">OpenStreetMap / Overpass API</a> (live, ODbL) for water/grid/land/connectivity. Policy check covers Texas and Illinois only (documented state programs) — every other state shows as policy-unknown, not policy-fail.<br><br>
+        Not established by this tool: water rights, spare grid capacity, land ownership/zoning, actual fiber routes, and permitting specifics. 68 locations were hand-picked as known industrial, power, or fiber hub areas — this is not an exhaustive scan of the continent, and strong sites in less-obvious locations can be missed.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="scan-data.js"></script>
+<script>
+/* ---------- geometry helpers (local equirectangular projection, same approach as the companion Atlas tool) ---------- */
+const DEG = Math.PI/180, R = 6371;
+function toXY(lon, lat, originLon, originLat) {
+  return [(lon-originLon)*DEG*R*Math.cos(originLat*DEG), (lat-originLat)*DEG*R];
+}
+function ringContains(p, ring) {
+  let inside = false;
+  for (let i=0, j=ring.length-1; i<ring.length; j=i++) {
+    const a=ring[i], b=ring[j];
+    if (((a[1]>p[1])!==(b[1]>p[1])) && (p[0] < (b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1]) + a[0])) inside = !inside;
+  }
+  return inside;
+}
+function polygonContains(p, rings) { return rings.length>0 && ringContains(p, rings[0]) && !rings.slice(1).some(r=>ringContains(p,r)); }
+function geomContains(p, g) {
+  if (!g) return false;
+  if (g.type==='Polygon') return polygonContains(p, g.coordinates);
+  if (g.type==='MultiPolygon') return g.coordinates.some(poly=>polygonContains(p, poly));
+  return false;
+}
+function ringArea(ring) { let a=0; for (let i=0;i<ring.length;i++){const j=(i+1)%ring.length; a+=ring[i][0]*ring[j][1]-ring[j][0]*ring[i][1];} return Math.abs(a/2); }
+function polygonArea(p) { return Math.max(0, ringArea(p[0]) - p.slice(1).reduce((n,r)=>n+ringArea(r),0)); }
+function geomArea(g) { return g.type==='Polygon' ? polygonArea(g.coordinates) : g.type==='MultiPolygon' ? g.coordinates.reduce((n,p)=>n+polygonArea(p),0) : 0; }
+function projectGeometry(g, origin) {
+  function walk(a){ return typeof a[0]==='number' ? toXY(a[0],a[1],origin[0],origin[1]) : a.map(walk); }
+  return { type:g.type, coordinates: walk(g.coordinates) };
+}
+function segDistance(p,a,b) { const dx=b[0]-a[0], dy=b[1]-a[1]; const t=Math.max(0,Math.min(1, ((p[0]-a[0])*dx+(p[1]-a[1])*dy)/(dx*dx+dy*dy||1))); return Math.hypot(p[0]-a[0]-t*dx, p[1]-a[1]-t*dy); }
+function lineDistance(p,coords){ let d=Infinity; for(let i=1;i<coords.length;i++) d=Math.min(d, segDistance(p,coords[i-1],coords[i])); return d; }
+function geomDistance(p,g) {
+  const c = g.coordinates;
+  switch(g.type){
+    case 'Point': return Math.hypot(p[0]-c[0], p[1]-c[1]);
+    case 'MultiPoint': return Math.min(...c.map(a=>Math.hypot(p[0]-a[0],p[1]-a[1])));
+    case 'LineString': return lineDistance(p,c);
+    case 'MultiLineString': return c.reduce((d,line)=>Math.min(d,lineDistance(p,line)),Infinity);
+    case 'Polygon': return geomContains(p,g) ? 0 : c.reduce((d,line)=>Math.min(d,lineDistance(p,line)),Infinity);
+    case 'MultiPolygon': return geomContains(p,g) ? 0 : c.reduce((d,poly)=>Math.min(d,...poly.map(line=>lineDistance(p,line))),Infinity);
+    default: return Infinity;
+  }
+}
+function voltageOf(tags){ return Math.max(0, ...String(tags.voltage||'').split(';').map(v=>/^\d+(\.\d+)?$/.test(v.trim())?Number(v)/1000:0)); }
+function classify(tags){
+  if (['river','canal'].includes(tags.waterway) || (tags.natural==='water' && ['lake','reservoir','river'].includes(tags.water)) || tags.landuse==='reservoir') return 'water';
+  if (['line','cable','substation'].includes(tags.power)) return 'grid';
+  if (tags.landuse==='industrial') return 'land';
+  if (['data_center','exchange','connection_point'].includes(tags.telecom) || tags.building==='data_center') return 'connectivity';
+  return null;
+}
+
+/* ---------- criteria & policy ---------- */
+const CRITERIA = [
+  { key:'water',        label:'Water for cooling', color:'#44c4fa', desc:'Nearest mapped river/lake/reservoir', unit:'km', min:1, max:15, step:1, value:6 },
+  { key:'grid',         label:'Grid & power',      color:'#ffb75f', desc:'Nearest 115kV+ line/substation',      unit:'km', min:1, max:15, step:1, value:8 },
+  { key:'land',         label:'Industrial land',   color:'#e6d588', desc:'Nearest mapped industrial area (20ha+)', unit:'km', min:1, max:15, step:1, value:8, extra:'20ha minimum size' },
+  { key:'connectivity', label:'Connectivity',      color:'#d09cfe', desc:'Nearest telecom exchange/data center',unit:'km', min:1, max:20, step:1, value:12 },
+  { key:'policy',       label:'Government policy', color:'#a2c4de', desc:'Documented state DC incentive program (TX, IL only — others unknown)' }
+];
+const POLICIES = {
+  Texas:    { pass:true,  note:'Qualifying data-center tax program documented.', source:'https://comptroller.texas.gov/taxes/data-centers/' },
+  Illinois: { pass:false, note:'DCEO stopped processing applications July 1, 2026.', source:'https://dceo.illinois.gov/expandrelocate/incentives/datacenters.html' }
+};
+const config = { water:6, grid:8, land:8, minVoltage:115, minHectares:20, connectivity:12 };
+let checked = {}; CRITERIA.forEach(c => checked[c.key] = (c.key==='water' || c.key==='grid'));
+
+const CANDIDATES = [{"name": "Ashburn (Loudoun County)", "state": "Virginia", "lat": 39.0438, "lon": -77.4874}, {"name": "Richmond (Henrico County)", "state": "Virginia", "lat": 37.5407, "lon": -77.436}, {"name": "Charlotte", "state": "North Carolina", "lat": 35.2271, "lon": -80.8431}, {"name": "Raleigh-Durham", "state": "North Carolina", "lat": 35.7796, "lon": -78.6382}, {"name": "Columbia", "state": "South Carolina", "lat": 34.0007, "lon": -81.0348}, {"name": "Greenville", "state": "South Carolina", "lat": 34.8526, "lon": -82.394}, {"name": "Atlanta", "state": "Georgia", "lat": 33.749, "lon": -84.388}, {"name": "Savannah", "state": "Georgia", "lat": 32.0809, "lon": -81.0912}, {"name": "Jacksonville", "state": "Florida", "lat": 30.3322, "lon": -81.6557}, {"name": "Tampa", "state": "Florida", "lat": 27.9506, "lon": -82.4572}, {"name": "Miami", "state": "Florida", "lat": 25.7617, "lon": -80.1918}, {"name": "Birmingham", "state": "Alabama", "lat": 33.5186, "lon": -86.8104}, {"name": "Huntsville", "state": "Alabama", "lat": 34.7304, "lon": -86.5861}, {"name": "Memphis", "state": "Tennessee", "lat": 35.1495, "lon": -90.049}, {"name": "Nashville", "state": "Tennessee", "lat": 36.1627, "lon": -86.7816}, {"name": "Louisville", "state": "Kentucky", "lat": 38.2527, "lon": -85.7585}, {"name": "Lexington", "state": "Kentucky", "lat": 38.0406, "lon": -84.5037}, {"name": "Jackson", "state": "Mississippi", "lat": 32.2988, "lon": -90.1848}, {"name": "Tupelo", "state": "Mississippi", "lat": 34.2576, "lon": -88.7034}, {"name": "Little Rock", "state": "Arkansas", "lat": 34.7465, "lon": -92.2896}, {"name": "Baton Rouge", "state": "Louisiana", "lat": 30.4515, "lon": -91.1871}, {"name": "New Orleans", "state": "Louisiana", "lat": 29.9511, "lon": -90.0715}, {"name": "Dallas-Fort Worth", "state": "Texas", "lat": 32.7767, "lon": -96.797}, {"name": "Austin", "state": "Texas", "lat": 30.2672, "lon": -97.7431}, {"name": "San Antonio", "state": "Texas", "lat": 29.4241, "lon": -98.4936}, {"name": "Houston", "state": "Texas", "lat": 29.7604, "lon": -95.3698}, {"name": "Odessa-Midland", "state": "Texas", "lat": 31.8457, "lon": -102.3676}, {"name": "Amarillo", "state": "Texas", "lat": 35.222, "lon": -101.8313}, {"name": "El Paso", "state": "Texas", "lat": 31.7619, "lon": -106.485}, {"name": "Oklahoma City", "state": "Oklahoma", "lat": 35.4676, "lon": -97.5164}, {"name": "Tulsa", "state": "Oklahoma", "lat": 36.154, "lon": -95.9928}, {"name": "Wichita", "state": "Kansas", "lat": 37.6872, "lon": -97.3301}, {"name": "Kansas City", "state": "Missouri", "lat": 39.0997, "lon": -94.5786}, {"name": "Omaha", "state": "Nebraska", "lat": 41.2565, "lon": -95.9345}, {"name": "Papillion (Sarpy County)", "state": "Nebraska", "lat": 41.1544, "lon": -96.0428}, {"name": "Des Moines", "state": "Iowa", "lat": 41.5868, "lon": -93.625}, {"name": "Council Bluffs", "state": "Iowa", "lat": 41.2619, "lon": -95.8608}, {"name": "Sioux Falls", "state": "South Dakota", "lat": 43.5446, "lon": -96.7311}, {"name": "Fargo", "state": "North Dakota", "lat": 46.8772, "lon": -96.7898}, {"name": "Minneapolis", "state": "Minnesota", "lat": 44.9778, "lon": -93.265}, {"name": "Milwaukee", "state": "Wisconsin", "lat": 43.0389, "lon": -87.9065}, {"name": "Chicago", "state": "Illinois", "lat": 41.8781, "lon": -87.6298}, {"name": "Indianapolis", "state": "Indiana", "lat": 39.7684, "lon": -86.1581}, {"name": "Columbus", "state": "Ohio", "lat": 39.9612, "lon": -82.9988}, {"name": "New Albany", "state": "Ohio", "lat": 40.0817, "lon": -82.8071}, {"name": "Detroit", "state": "Michigan", "lat": 42.3314, "lon": -83.0458}, {"name": "Grand Rapids", "state": "Michigan", "lat": 42.9634, "lon": -85.6681}, {"name": "Pittsburgh", "state": "Pennsylvania", "lat": 40.4406, "lon": -79.9959}, {"name": "Harrisburg", "state": "Pennsylvania", "lat": 40.2732, "lon": -76.8867}, {"name": "Secaucus (NY Metro)", "state": "New Jersey", "lat": 40.7895, "lon": -74.0565}, {"name": "Boston", "state": "Massachusetts", "lat": 42.3601, "lon": -71.0589}, {"name": "Denver", "state": "Colorado", "lat": 39.7392, "lon": -104.9903}, {"name": "Cheyenne", "state": "Wyoming", "lat": 41.14, "lon": -104.8202}, {"name": "Salt Lake City", "state": "Utah", "lat": 40.7608, "lon": -111.891}, {"name": "West Jordan", "state": "Utah", "lat": 40.6097, "lon": -111.9391}, {"name": "Boise", "state": "Idaho", "lat": 43.615, "lon": -116.2023}, {"name": "Twin Falls", "state": "Idaho", "lat": 42.5629, "lon": -114.4609}, {"name": "Mesa (Phoenix Metro)", "state": "Arizona", "lat": 33.4152, "lon": -111.8315}, {"name": "Storey County (Reno)", "state": "Nevada", "lat": 39.5296, "lon": -119.4573}, {"name": "Las Vegas", "state": "Nevada", "lat": 36.1699, "lon": -115.1398}, {"name": "Albuquerque", "state": "New Mexico", "lat": 35.0844, "lon": -106.6504}, {"name": "Los Lunas", "state": "New Mexico", "lat": 34.8062, "lon": -106.7334}, {"name": "Sacramento", "state": "California", "lat": 38.5816, "lon": -121.4944}, {"name": "San Jose (Silicon Valley)", "state": "California", "lat": 37.3382, "lon": -121.8863}, {"name": "Quincy", "state": "Washington", "lat": 47.2343, "lon": -119.8528}, {"name": "Prineville", "state": "Oregon", "lat": 44.3001, "lon": -120.8345}, {"name": "Hillsboro (Portland Metro)", "state": "Oregon", "lat": 45.5051, "lon": -122.9843}, {"name": "Seattle", "state": "Washington", "lat": 47.6062, "lon": -122.3321}];
+
+let candidateResults = [];
+let scanning = false;
+let stopRequested = false;
+let activeController = null;
+const CACHE_KEY = 'na-dc-hotspots-v2';
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function setStatus(text, error=false) { const el=document.getElementById('scanStatus');el.textContent=text;el.classList.toggle('error',error); }
+function saveCache() {
+  try { localStorage.setItem(CACHE_KEY,JSON.stringify({schema:2,results:candidateResults.filter(r=>!r.error)})); } catch { /* Storage may be unavailable; export still works. */ }
+}
+function restoreRows(payload) {
+  if (!payload || payload.schema!==2 || !Array.isArray(payload.results)) return [];
+  return payload.results.flatMap(r=>{
+    const c=CANDIDATES.find(c=>c.name===r.name && c.lat===r.lat && c.lon===r.lon);
+    if (!c || r.error || !r.hasData || !r.dist || r.radiusKm!==23 || !r.timestamp) return [];
+    if (['water','grid','land','connectivity'].some(k=>typeof r.hasData[k]!=='boolean' || (r.hasData[k] && (!Number.isFinite(r.dist[k]) || r.dist[k]<0)))) return [];
+    return [{...r,...c,policy:POLICIES[c.state]||null}];
+  });
+}
+
+/* ---------- map ---------- */
+if (!window.L || !window.osmtogeojson) {
+  setStatus('The map libraries could not load. Open this site in Chrome or Safari with internet access, then reload. No geographic data has been queried.',true);
+  document.getElementById('scanBtn').disabled=true;
+  document.getElementById('oneBtn').disabled=true;
+  throw new Error('Required map library unavailable');
+}
+const map = L.map('map').setView([39.5, -98.5], 4);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+  attribution:'Tiles &copy; Esri', maxZoom:12
+}).addTo(map);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', { maxZoom:12 }).addTo(map);
+
+let markersLayer = L.layerGroup().addTo(map);
+
+/* ---------- Overpass query per candidate ---------- */
+function queryFor(c, radiusKm) {
+  const dLat = radiusKm/111.195, dLon = radiusKm/(111.195*Math.cos(c.lat*Math.PI/180));
+  const bbox = [c.lat-dLat, c.lon-dLon, c.lat+dLat, c.lon+dLon].join(',');
+  return `[out:json][timeout:30];(nwr["waterway"~"^(river|canal)$"](${bbox});nwr["natural"="water"]["water"~"^(lake|reservoir|river)$"](${bbox});nwr["landuse"="reservoir"](${bbox});nwr["power"~"^(line|cable|substation)$"](${bbox});nwr["landuse"="industrial"](${bbox});nwr["telecom"~"^(data_center|exchange|connection_point)$"](${bbox});nwr["building"="data_center"](${bbox}););out body geom;`;
+}
+
+async function fetchJSON(url, options, timeoutMs) {
+  const controller = new AbortController();
+  activeController = controller;
+  const timer = setTimeout(()=>controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { ...options, signal: controller.signal });
+    if (!r.ok) {const e=new Error(`HTTP ${r.status}`);e.httpStatus=r.status;throw e;}
+    return await r.json();
+  } finally { clearTimeout(timer); if(activeController===controller)activeController=null; }
+}
+
+async function scanOne(c) {
+  const radiusKm = 23; // Cover every slider's maximum, including after the scan.
+  const query = queryFor(c, radiusKm);
+  let data;
+  try {
+    data = await fetchJSON(document.getElementById('endpointSelect').value, {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+      body:'data='+encodeURIComponent(query)
+    }, 45000);
+  } catch(e) {
+    return { ...c, error: e.name==='AbortError'?(stopRequested?'Stopped by user':'Request timed out after 45 seconds'):(e.message || 'Query failed'), httpStatus:e.httpStatus||null };
+  }
+  if (data.remark) return {...c,error:'Incomplete response: '+data.remark};
+  if (!Array.isArray(data.elements)) return { ...c, error: 'No features returned' };
+
+  const geo = osmtogeojson(data, { flatProperties:false });
+  const origin = [c.lon, c.lat];
+  const groups = { water:[], grid:[], land:[], connectivity:[] };
+  for (const f of geo.features) {
+    if (!f.geometry || !f.geometry.coordinates || f.properties?.tainted) continue;
+    const tags = f.properties?.tags || f.properties || {};
+    const key = classify(tags);
+    if (!key) continue;
+    const geometry = projectGeometry(f.geometry, origin);
+    if (key==='land' && !['Polygon','MultiPolygon'].includes(geometry.type)) continue;
+    groups[key].push({ geometry, voltageKV: voltageOf(tags), hectares: geomArea(geometry)*100, name: tags.name || tags.ref || 'Unnamed' });
+  }
+
+  function nearest(list) { let d=Infinity; for (const f of list) d=Math.min(d, geomDistance([0,0], f.geometry)); return d; }
+
+  const gridEligible = groups.grid.filter(f => f.voltageKV >= config.minVoltage);
+  const landEligible = groups.land.filter(f => f.hectares >= config.minHectares);
+
+  return {
+    ...c,
+    radiusKm,
+    underwater: groups.water.some(f=>geomContains([0,0],f.geometry)),
+    source: document.getElementById('endpointSelect').value,
+    loadedAt: new Date().toISOString(),
+    hasData: { water: groups.water.length>0, grid: gridEligible.length>0, land: landEligible.length>0, connectivity: groups.connectivity.length>0 },
+    dist: {
+      water: groups.water.length ? nearest(groups.water) : null,
+      grid: gridEligible.length ? nearest(gridEligible) : null,
+      land: landEligible.length ? nearest(landEligible) : null,
+      connectivity: groups.connectivity.length ? nearest(groups.connectivity) : null
+    },
+    policy: POLICIES[c.state] || null,
+    timestamp: data.osm3s?.timestamp_osm_base || null
+  };
+}
+
+/* ---------- scan orchestration ---------- */
+async function runScan(targets=CANDIDATES, force=false) {
+  if (scanning) return;
+  const queue=targets.filter(c=>force || !candidateResults.some(r=>r.name===c.name&&!r.error));
+  if(!queue.length){setStatus('These locations already have saved observations. Checkboxes and sliders filter them immediately. Use Refresh selected to fetch again.');return;}
+  scanning = true;
+  stopRequested = false;
+  document.getElementById('scanBtn').disabled = true;
+  document.getElementById('oneBtn').disabled = true;
+  document.getElementById('endpointSelect').disabled = true;
+  document.getElementById('scanBtn').textContent = 'Scanning…';
+  document.getElementById('stopBtn').style.display = 'block';
+  document.getElementById('rescanBtn').style.display = 'none';
+  document.getElementById('progressTrack').classList.add('active');
+  let consecutiveFailures=0,completed=0,lastError=null;
+  try {
+    for (let i=0; i<queue.length && !stopRequested; i++) {
+      const c = queue[i];
+      setStatus(`Loading ${i+1}/${queue.length}: ${c.name}, ${c.state}… Results remain usable as they arrive.`);
+      let r;
+      try {r=await scanOne(c);}catch(e){r={...c,error:'Could not process source geometry: '+e.message};}
+      if(stopRequested)break;
+      completed++;
+      const old=candidateResults.findIndex(x=>x.name===c.name);
+      // Keep previously successful observations when a refresh fails.
+      if(old<0)candidateResults.push(r);
+      else if(!r.error || candidateResults[old].error)candidateResults[old]=r;
+      consecutiveFailures=r.error?consecutiveFailures+1:0;
+      if(r.error)lastError=r.error;
+      saveCache();
+      renderAll(candidateResults); // Shared state stays current for checkbox changes.
+      document.getElementById('progressFill').style.width=Math.round(completed/queue.length*100)+'%';
+      if(r.httpStatus===429 || r.httpStatus===406){setStatus('The source asked us to pause (HTTP '+r.httpStatus+'). Saved observations remain visible. Wait at least 30 seconds before retrying.',true);return;}
+      if(consecutiveFailures>=3){setStatus('Stopped after three consecutive source failures: '+lastError+'. This is a data-loading problem, not evidence that these locations fail your criteria.',true);return;}
+      if(i<queue.length-1)await new Promise(res=>setTimeout(res,1500));
+    }
+    const good=candidateResults.filter(r=>!r.error).length;
+    setStatus(`${stopRequested?'Stopped.':'Scan finished.'} ${good} locations have observations. ${lastError?'Last request error: '+lastError:'Results are saved in this browser; use Save loaded data for a portable copy.'}`,!!lastError);
+  } finally {
+    scanning=false;
+    document.getElementById('scanBtn').disabled=false;
+    document.getElementById('scanBtn').textContent='Scan remaining locations';
+    document.getElementById('oneBtn').disabled=false;
+    document.getElementById('endpointSelect').disabled=false;
+    document.getElementById('stopBtn').style.display='none';
+    document.getElementById('rescanBtn').style.display='block';
+    document.getElementById('rescanBtn').textContent='Refresh selected location';
+    renderAll(candidateResults);
+  }
+}
+
+/* ---------- scoring / rendering ---------- */
+function passesTest(r, key) {
+  if (key === 'policy') return POLICIES[r.state] ? POLICIES[r.state].pass : null;
+  if (!r.hasData || !r.hasData[key] || !Number.isFinite(r.dist?.[key])) return null;
+  return r.dist[key] <= config[key];
+}
+function meetsChecked(r) {
+  const active = CRITERIA.filter(c => checked[c.key]).map(c => c.key);
+  if (active.length === 0) return { status:'neutral' };
+  if (r.underwater) return {status:'fail'};
+  const tests = active.map(k => passesTest(r, k));
+  if (tests.some(t => t === null)) return { status:'unknown' };
+  if (tests.every(t => t === true)) return { status:'match' };
+  return { status:'fail' };
+}
+
+function renderCriteriaList() {
+  const el = document.getElementById('criteriaList');
+  el.innerHTML = CRITERIA.map(c => `
+    <div class="criteria-item ${checked[c.key]?'active':''}" data-key="${c.key}">
+      <input type="checkbox" id="chk-${c.key}" ${checked[c.key]?'checked':''} />
+      <span class="swatch" style="background:${c.color};"></span>
+      <span class="label">${c.label}<span class="desc">${c.desc}${c.unit ? ` · within <b id="val-${c.key}">${config[c.key]}</b> ${c.unit}` : ''}</span></span>
+    </div>
+    ${c.unit ? `<input type="range" data-range="${c.key}" min="${c.min}" max="${c.max}" step="${c.step}" value="${config[c.key]}" style="margin:-2px 0 4px;">` : ''}
+  `).join('');
+  CRITERIA.forEach(c => {
+    document.getElementById(`chk-${c.key}`).addEventListener('change', e => { checked[c.key]=e.target.checked; renderCriteriaList(); renderAll(candidateResults); });
+    document.querySelector(`.criteria-item[data-key="${c.key}"]`).addEventListener('click', e => { if (e.target.tagName==='INPUT') return; checked[c.key]=!checked[c.key]; renderCriteriaList(); renderAll(candidateResults); });
+    const range = document.querySelector(`[data-range="${c.key}"]`);
+    if (range) range.addEventListener('input', e => { config[c.key]=Number(e.target.value); document.getElementById(`val-${c.key}`).textContent=e.target.value; renderAll(candidateResults); });
+  });
+}
+
+function popupHtml(r) {
+  const line = (label, key) => {
+    if (key==='policy') return r.policy ? `${label}: <b>${r.policy.pass?'Program documented':'No longer accepting applications'}</b> — <a href="${r.policy.source}" target="_blank">source</a>` : `${label}: <i>unknown (not reviewed)</i>`;
+    if(r.error && key!=='policy')return `${label}: <i>not loaded — request failed</i>`;
+    if (!r.hasData || r.hasData[key]===false) return `${label}: <i>no mapped data nearby</i>`;
+    return `${label}: <b>${r.dist[key].toFixed(1)} km</b>`;
+  };
+  return `<div style="min-width:220px;font-family:sans-serif;">
+    <b style="font-size:14px;">${r.name}, ${r.state}</b>
+    <hr style="margin:6px 0;border-color:#333;">
+    ${line('Water','water')}<br>${line('Grid','grid')}<br>${line('Land','land')}<br>${line('Connectivity','connectivity')}<br>${line('Policy','policy')}
+    <hr style="margin:6px 0;border-color:#333;">
+    <small style="color:#aaa;">${r.timestamp ? 'OSM snapshot: '+esc(r.timestamp) : esc(r.error||'Not loaded')}</small>
+  </div>`;
+}
+
+function renderAll(results) {
+  markersLayer.clearLayers();
+  results=results||[];
+  const activeCount = CRITERIA.filter(c=>checked[c.key]).length;
+  document.getElementById('s-checked').textContent = activeCount;
+  const good=results.filter(r=>!r.error).length,failed=results.filter(r=>r.error).length;
+  document.getElementById('coverageStatus').textContent=`${good} loaded · ${failed} failed · ${CANDIDATES.length-results.length} not loaded`;
+  document.getElementById('exportBtn').disabled=!good;
+  CANDIDATES.filter(c=>!results.some(r=>r.name===c.name)).forEach(c=>L.circleMarker([c.lat,c.lon],{radius:4,color:'#8b949e',weight:1,fillColor:'#21262d',fillOpacity:.6}).bindTooltip(`${c.name}, ${c.state} — not loaded`).addTo(markersLayer));
+
+  if (!results || !results.length) {
+    document.getElementById('s-match').textContent = '—';
+    document.getElementById('matchList').innerHTML='<div class="empty-msg">No geographic observations loaded. Choose a location above and click Load selected location. Checkboxes will filter observations once received.</div>';
+    return;
+  }
+
+  let matchCount = 0;
+  const rendered = results.map(r => {
+    if (r.error) return { r, status:'error' };
+    const m = meetsChecked(r);
+    if (m.status==='match') matchCount++;
+    return { r, status:m.status };
+  });
+
+  document.getElementById('s-match').textContent = activeCount && good ? matchCount : '—';
+
+  rendered.forEach(({r, status}) => {
+    if (r.error) {
+      L.circleMarker([r.lat, r.lon], { radius:5, color:'#555', fillColor:'#333', weight:1, fillOpacity:0.5 }).bindPopup(popupHtml(r)).addTo(markersLayer);
+      return;
+    }
+    let color = '#2a2f36', fillOpacity=0.35, radius=6;
+    if (status==='match') { color='#3fb950'; fillOpacity=0.9; radius=8; }
+    else if (status==='unknown') { color='#8b949e'; fillOpacity=0.5; radius=6; }
+    else if (status==='neutral') { color='#58a6ff'; fillOpacity=0.45; radius=6; }
+    L.circleMarker([r.lat, r.lon], { radius, color:'#fff', weight:1, fillColor:color, fillOpacity }).bindPopup(popupHtml(r)).addTo(markersLayer);
+  });
+
+  renderMatchList(rendered);
+}
+
+function renderMatchList(rendered) {
+  const el = document.getElementById('matchList');
+  const activeCount = CRITERIA.filter(c=>checked[c.key]).length;
+  if (!activeCount) { el.innerHTML = `<div class="empty-msg">Select one or more must-haves above.</div>`; return; }
+
+  const matches = rendered.filter(x => x.status==='match').map(x=>x.r);
+  const unknowns = rendered.filter(x => x.status==='unknown').map(x=>x.r);
+  const errors=rendered.filter(x=>x.status==='error');
+  if(errors.length===rendered.length){el.innerHTML='<div class="empty-msg">No geographic data loaded. All attempted requests failed. Open a gray marker for its error; check network access or try the other public service.</div>';return;}
+
+  if (!matches.length && !unknowns.length) {
+    el.innerHTML = `<div class="empty-msg">No loaded reference points meet every selected screen. ${errors.length} requests failed; those locations have not been evaluated.</div>`;
+    return;
+  }
+
+  const activeKeys = CRITERIA.filter(c=>checked[c.key]).map(c=>c.key);
+  function metaLine(r) {
+    return activeKeys.map(k => {
+      if (k==='policy') return `policy:${r.policy ? (r.policy.pass?'yes':'no') : '?'}`;
+      if (!r.hasData || !r.hasData[k]) return `${k}:?`;
+      return `${k}:${r.dist[k].toFixed(1)}km`;
+    }).join('  ');
+  }
+
+  el.innerHTML =
+    matches.map(r => `
+      <div class="match-item" onclick="flyTo(${r.lat},${r.lon})">
+        <div class="match-name">${r.name}, ${r.state}</div>
+        <div class="match-meta">${metaLine(r)}</div>
+        <div class="match-meta"><a href="#" onclick="event.stopPropagation();openInAtlas(${r.lat},${r.lon});return false;" style="color:#58a6ff;">Explore local evidence →</a></div>
+      </div>
+    `).join('') +
+    (unknowns.length ? `<div class="empty-msg" style="margin-top:8px;">${unknowns.length} locations have incomplete evidence (gray on map). ${checked.policy?'Policy is reviewed only for Texas and Illinois; the other states cannot pass this screen.':''}</div>` : '')+
+    (errors.length?`<div class="empty-msg">${errors.length} requests failed and were not evaluated.</div>`:'');
+}
+
+window.flyTo = (lat, lon) => map.flyTo([lat, lon], 9, { duration: 1 });
+
+// Edit this to your deployed Atlas tool's GitHub Pages URL once it's live, e.g.
+// 'https://yourusername.github.io/north-america-dc-atlas/'
+const ATLAS_BASE_URL = 'atlas/index.html';
+window.openInAtlas = (lat, lon) => {
+  const service=document.getElementById('endpointSelect').value.includes('private.coffee')?'coffee':'main';
+  const url = `${ATLAS_BASE_URL}?lat=${lat}&lon=${lon}&service=${service}`;
+  window.open(url, '_blank');
+};
+
+const picker=document.getElementById('candidateSelect');
+picker.innerHTML=CANDIDATES.map((c,i)=>`<option value="${i}" ${c.name==='Dallas-Fort Worth'?'selected':''}>${c.name}, ${c.state}</option>`).join('');
+document.getElementById('scanBtn').addEventListener('click',()=>runScan());
+document.getElementById('oneBtn').addEventListener('click',()=>runScan([CANDIDATES[Number(picker.value)]],true));
+document.getElementById('rescanBtn').addEventListener('click',()=>runScan([CANDIDATES[Number(picker.value)]],true));
+document.getElementById('stopBtn').addEventListener('click',()=>{stopRequested=true;activeController?.abort();setStatus('Stopping. Results already received are retained.');});
+document.getElementById('exportBtn').addEventListener('click',()=>{
+ const data={schema:2,exportedAt:new Date().toISOString(),results:candidateResults.filter(r=>!r.error)};
+ const content='window.NA_DC_SCAN_DATA = '+JSON.stringify(data,null,2).replace(/</g,'\\u003c')+';\n';
+ const a=document.createElement('a'),url=URL.createObjectURL(new Blob([content],{type:'application/javascript'}));a.href=url;a.download='scan-data.js';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ setStatus('Saved scan-data.js. Replace the file with that name in your GitHub repository to show these observations immediately on opening.');
+});
+candidateResults=restoreRows(window.NA_DC_SCAN_DATA);
+try{for(const row of restoreRows(JSON.parse(localStorage.getItem(CACHE_KEY)||'null'))){const old=candidateResults.findIndex(r=>r.name===row.name);if(old<0)candidateResults.push(row);else if(Date.parse(row.timestamp)>Date.parse(candidateResults[old].timestamp))candidateResults[old]=row;}}catch{}
+
+renderCriteriaList();
+renderAll(candidateResults);
+if(candidateResults.length)setStatus(`Restored ${candidateResults.length} saved observations. Checkboxes work immediately; source dates are shown on each marker.`);
+
+// Plot un-scanned candidates faintly so you can see the full location set before scanning
+// Unloaded reference locations are drawn by renderAll and remain visible during filtering.
+</script>
+
+<div style="position: fixed; bottom: 12px; right: 12px; background: rgba(22, 27, 34, 0.95); padding: 6px 14px; border-radius: 20px; font-size: 0.7rem; color: #8b949e; backdrop-filter: blur(4px); z-index: 1000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; border: 1px solid #30363d;">
+    Built by <a href="https://www.linkedin.com/in/manisha-sharma22/" target="_blank" style="color: #58a6ff; text-decoration: none; font-weight: 500;">Manisha Sharma, MBA</a> — Feedback welcome
+</div>
+</body>
+</html>
